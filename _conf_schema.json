@@ -1,0 +1,253 @@
+{
+    "basic_config": {
+        "description": "基础设置",
+        "type": "object",
+        "items": {
+            "base_url": {
+                "description": "vLLM 服务器地址",
+                "type": "string",
+                "default": "http://localhost",
+                "hint": "服务器所在主机地址，不含端口"
+            },
+            "port": {
+                "description": "vLLM 服务端口",
+                "type": "string",
+                "default": "8091",
+                "hint": "当访问不了时请检查防火墙"
+            },
+            "api_key": {
+                "description": "API 密钥",
+                "type": "string",
+                "default": "EMPTY",
+                "hint": "vLLM-Omni 默认无需鉴权，填写 EMPTY 即可"
+            },
+            "timeout": {
+                "description": "请求超时时间（秒）",
+                "type": "float",
+                "default": 300.0,
+                "hint": "流式请求与长文本生成建议适当调大"
+            },
+            "if_random_tts": {
+                "description": "是否开启随机文字转语音",
+                "type": "bool",
+                "default": false
+            },
+            "random_tts_factor": {
+                "description": "随机因子",
+                "type": "float",
+                "default": 0.4,
+                "hint": "因子越大越易触发"
+            }
+        }
+    },
+    "model_config": {
+        "description": "模型与音色设置",
+        "type": "object",
+        "items": {
+            "use_model": {
+                "description": "使用模型",
+                "type": "string",
+                "options": [
+                    "Qwen3-TTS-CustomVoice",
+                    "Qwen3-TTS-VoiceDesign",
+                    "Qwen3-TTS-Base",
+                    "Fish Speech S2 Pro",
+                    "Voxtral TTS",
+                    "CosyVoice3",
+                    "OmniVoice",
+                    "VoxCPM2",
+                    "MOSS-TTS-Nano",
+                    "Higgs Audio v2",
+                    "Higgs Audio v3",
+                    "IndexTTS-2",
+                    "Ming-omni-tts",
+                    "Ming-flash-omni-TTS",
+                    "SoulX-Singer"
+                ],
+                "default": "Qwen3-TTS-CustomVoice",
+                "hint": "选择 TTS 模型分派器；服务器实际模型以 vLLM 启动参数为准"
+            },
+            "model": {
+                "description": "模型名称（仅日志记录）",
+                "type": "string",
+                "default": "",
+                "hint": "仅供日志展示与本地分派区分，不会上传至服务器"
+            },
+            "audio_encode": {
+                "description": "参考音频编码方式",
+                "type": "string",
+                "options": [
+                    "utf-8",
+                    "ascii"
+                ],
+                "default": "utf-8",
+                "hint": "绝大多数模型使用 utf-8；Higgs 系列需使用 ascii"
+            },
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "大小不可超过 10MB 且长度小于 30s；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的内容（台词）",
+                "type": "text",
+                "default": "",
+                "hint": "建议填写，风味更佳；MOSS-TTS-Nano 会忽略此项"
+            },
+            "voice": {
+                "description": "预设音色名称",
+                "type": "string",
+                "default": "",
+                "hint": "Voxtral / IndexTTS-2 上传音色 / Ming 说话人 ID 等使用"
+            },
+            "speaker": {
+                "description": "Qwen3 说话人",
+                "type": "string",
+                "default": "",
+                "hint": "Qwen3-TTS 预设说话人：vivian、ryan、aiden 等"
+            },
+            "task_type": {
+                "description": "Qwen3 任务类型",
+                "type": "string",
+                "options": [
+                    "CustomVoice",
+                    "VoiceDesign",
+                    "Base"
+                ],
+                "default": "CustomVoice",
+                "hint": "CustomVoice 预设音色；VoiceDesign 按描述生成；Base 音色克隆"
+            },
+            "language": {
+                "description": "语言提示",
+                "type": "string",
+                "default": "",
+                "hint": "Qwen3 / OmniVoice 使用，如 Chinese、English、French"
+            },
+            "dialect": {
+                "description": "方言控制",
+                "type": "string",
+                "default": "",
+                "hint": "Ming-omni-tts 使用，映射到 API language 字段，如 广粤话"
+            },
+            "instructions": {
+                "description": "风格/情感指令",
+                "type": "text",
+                "default": "",
+                "hint": "Qwen3 / Ming / OmniVoice / Ming-flash 使用，自由文本"
+            },
+            "instruction_json": {
+                "description": "结构化指令 JSON",
+                "type": "text",
+                "default": "",
+                "hint": "Ming 系列可用，与 instructions 互斥"
+            },
+            "stream": {
+                "description": "启用流式输出",
+                "type": "bool",
+                "default": false,
+                "hint": "流式时输出为 output.pcm，供流式传输使用"
+            },
+            "response_format": {
+                "description": "音频输出格式",
+                "type": "string",
+                "options": [
+                    "wav",
+                    "mp3",
+                    "flac",
+                    "pcm",
+                    "aac",
+                    "opus"
+                ],
+                "default": "wav",
+                "hint": "流式模式下强制为 pcm"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 300,
+                "hint": "Higgs / GLM / Qwen3 / MOSS 使用"
+            },
+            "seed": {
+                "description": "随机种子",
+                "type": "int",
+                "default": 42,
+                "hint": "Higgs 用于确定性输出"
+            },
+            "speaker_embedding": {
+                "description": "说话人嵌入文件",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "json"
+                ],
+                "hint": "Ming 需 192 维 JSON；Qwen3 Base 为预计算嵌入"
+            },
+            "x_vector_only": {
+                "description": "仅使用 x-vector 模式",
+                "type": "bool",
+                "default": false,
+                "hint": "Qwen3 Base 克隆时使用，关闭 ICL 模式"
+            },
+            "emo_audio": {
+                "description": "情感参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav",
+                    "mp3",
+                    "flac",
+                    "ogg"
+                ],
+                "hint": "IndexTTS-2 情感条件控制"
+            },
+            "emo_text": {
+                "description": "情感描述文本",
+                "type": "string",
+                "default": "",
+                "hint": "IndexTTS-2 情感文本"
+            },
+            "emo_alpha": {
+                "description": "情感强度",
+                "type": "float",
+                "default": 0.0,
+                "hint": "IndexTTS-2 情感权重，范围 [0, 1]"
+            },
+            "use_emo_text": {
+                "description": "从文本推断情感",
+                "type": "bool",
+                "default": false,
+                "hint": "IndexTTS-2：从 emo_text 或文本推断情感向量"
+            },
+            "use_random": {
+                "description": "使用随机情感原型",
+                "type": "bool",
+                "default": false,
+                "hint": "IndexTTS-2 随机情感"
+            },
+            "prompt_audio": {
+                "description": "提示人声音频（SoulX-Singer）",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav",
+                    "mp3"
+                ],
+                "hint": "SoulX-Singer 歌词/旋律条件音频"
+            },
+            "target_audio": {
+                "description": "目标伴奏音频（SoulX-Singer）",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav",
+                    "mp3"
+                ],
+                "hint": "SoulX-Singer 目标伴奏，服务器可达路径"
+            }
+        }
+    }
+}

@@ -1,0 +1,10 @@
+# Core runtime dependencies
+# (httpx and pydantic are also bundled with AstrBot, listed here for
+# standalone/development environments)
+httpx>=0.28.1
+pydantic>=2.12.5
+
+
+# Note: the model client/demo scripts under text_to_speech/ (e.g. gradio
+# demos) require additional optional deps (gradio, numpy, soundfile, torch)
+# but only run on the vLLM-Omni server side and are NOT needed by this plugin.
