@@ -207,7 +207,7 @@ class RandomTTS:
 # Plugin Entry
 # ---------------------------------------------------------------------------
 
-@register("astrbot_plugin_tts_vllm_omni", "xiewoc", "https://github.com/xiewoc", "1.0.0")
+@register("astrbot_plugin_tts_vllm_omni", "xiewoc", "https://github.com/xiewoc/astrbot_plugins_tts_vllm_omni", "1.0.0")
 class AstrBot_Plugin_tts_vllm_omni(Star):
     """vLLM-Omni TTS 插件主入口。"""
 
