@@ -53,43 +53,66 @@ class TTSTool(FunctionTool[AstrAgentContext]):
     config: dict = Field(default_factory=dict)
     base_data_path: Path = Field(default_factory=Path)
 
+    # ---- 安全路径解析 ----
+
+    def _safe_resolve_path(self, item) -> str | None:
+        """安全地解析文件路径，防止路径遍历攻击。
+
+        确保返回的路径严格位于 self.base_data_path 内部。
+        如果传入值为空或非法，返回 None。
+        """
+        if item is None:
+            return None
+        if isinstance(item, (list, tuple)):
+            for sub in item:
+                result = self._safe_resolve_path(sub)
+                if result is not None:
+                    return result
+            return None
+        if not isinstance(item, (str, Path)):
+            return None
+
+        item_str = str(item).strip()
+        if not item_str:
+            return None
+
+        try:
+            candidate = (self.base_data_path / item_str).resolve()
+            base_resolved = self.base_data_path.resolve()
+            # 关键安全检查：解析后的路径必须在 base_data_path 之下
+            candidate.relative_to(base_resolved)
+        except (OSError, ValueError):
+            logger.warning(
+                "安全拦截: 路径 '%s' 试图访问数据目录 '%s' 之外的文件，已拒绝。",
+                item_str, self.base_data_path,
+            )
+            return None
+
+        return str(candidate)
+
     # ---- 内部工具方法 ----
 
     def _resolve_file_field(self, value) -> str | None:
         """将 AstrBot file 类型配置（始终为 list）解包为单个字符串路径或 None。"""
-        if value is None:
-            return None
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                if not item:
-                    continue
-                if isinstance(item, (str, Path)):
-                    return str(self.base_data_path / Path(item))
-                return str(item)
-            return None
-        if isinstance(value, (str, Path)):
-            return str(self.base_data_path / Path(value))
-        return None
+        return self._safe_resolve_path(value)
 
     def _resolve_ref_audio(self, raw_ref_audio, use_model: str) -> str | list[str] | None:
         """处理 ref_audio：Ming 系列保留多文件列表，其余取首个。"""
         if isinstance(raw_ref_audio, (list, tuple)):
-            paths = [
-                str(self.base_data_path / Path(item))
-                for item in raw_ref_audio
-                if item and isinstance(item, (str, Path))
-            ]
+            paths = []
+            for item in raw_ref_audio:
+                resolved = self._safe_resolve_path(item)
+                if resolved is not None:
+                    paths.append(resolved)
             logger.debug("ref_audio resolved paths: %s", paths)
             if use_model in _MULTI_REF_MODELS and len(paths) > 1:
                 return paths
             return paths[0] if paths else None
 
-        if isinstance(raw_ref_audio, (str, Path)):
-            resolved = str(self.base_data_path / Path(raw_ref_audio))
+        resolved = self._safe_resolve_path(raw_ref_audio)
+        if resolved is not None:
             logger.debug("ref_audio resolved path: %s", resolved)
-            return resolved
-
-        return None
+        return resolved
 
     def _build_args(self, text: str) -> types.SimpleNamespace:
         """根据插件配置构建 TTS 请求参数命名空间。"""
@@ -105,7 +128,7 @@ class TTSTool(FunctionTool[AstrAgentContext]):
         args.text = text
         args.model = model.get("model") or model.get("use_model", "unknown")
 
-        # -- File 类型字段（AstrBot file 配置始终为 list，需解包）--
+        # -- File 类型字段（全部通过安全路径解析）--
         args.ref_audio = self._resolve_ref_audio(model.get("ref_audio"), args.model)
         args.speaker_embedding = self._resolve_file_field(model.get("speaker_embedding"))
         args.emo_audio = self._resolve_file_field(model.get("emo_audio"))
@@ -207,7 +230,7 @@ class RandomTTS:
 # Plugin Entry
 # ---------------------------------------------------------------------------
 
-@register("astrbot_plugin_tts_vllm_omni", "xiewoc", "https://github.com/xiewoc/astrbot_plugins_tts_vllm_omni", "1.0.0")
+@register("astrbot_plugin_tts_vllm_omni", "xiewoc", "https://github.com/xiewoc", "1.0.0")
 class AstrBot_Plugin_tts_vllm_omni(Star):
     """vLLM-Omni TTS 插件主入口。"""
 
@@ -234,15 +257,19 @@ class AstrBot_Plugin_tts_vllm_omni(Star):
         self._random_tts_factor = float(basic_cfg.get("random_tts_factor", 0.4))
         self._random_tts = RandomTTS(self.tts_tool)
 
-        # 检查参考音频是否存在
+        # 检查参考音频是否存在（使用安全路径解析）
         model_cfg = self.config.get("model_config", {})
         ref_audio = model_cfg.get("ref_audio")
         if ref_audio:
             items = ref_audio if isinstance(ref_audio, (list, tuple)) else [ref_audio]
             for idx, item in enumerate(items):
-                if item and not (data_dir / Path(item)).exists():
+                resolved = self.tts_tool._safe_resolve_path(item)
+                if resolved is None:
                     label = f"#{idx}" if isinstance(ref_audio, (list, tuple)) else ""
-                    logger.warning("参考音频%s不存在: %s", label, data_dir / Path(item))
+                    logger.warning("参考音频%s路径无效或被安全策略拦截: %s", label, item)
+                elif not Path(resolved).exists():
+                    label = f"#{idx}" if isinstance(ref_audio, (list, tuple)) else ""
+                    logger.warning("参考音频%s不存在: %s", label, resolved)
 
         # 安全打印配置（脱敏）
         safe_config = {
