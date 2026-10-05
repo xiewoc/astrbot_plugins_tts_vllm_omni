@@ -10,7 +10,8 @@
 - 🔊 **音色克隆**：通过 `ref_audio` + `ref_text`（或 `speaker_embedding`）克隆任意音色
 - 🤖 **LLM 工具调用**：注册 `tts_speech` / `send_vocal_msg_no_return` 工具，用户要求"发语音/朗读"时由 Agent 自动调用
 - 🎲 **随机 TTS**：按概率将纯文本回复替换为语音，让机器人"开口说话"
-- 🌊 **流式输出**：支持 PCM 流式输出（依模型而定）
+- 🌊 **流式输出**：支持 PCM 流式输出（依模型而定），返回前自动补 WAV 头，保证平台可播放
+- 🗂️ **临时文件治理**：音频统一写入 AstrBot 临时目录，由核心按 `temp_dir_max_size` 自动清理
 - 🎭 **情感控制**：IndexTTS-2 情感参考音频 / 情感文本 / 强度调节
 - 🌏 **多语言与方言**：支持 Chinese / English / French 等语言及粤语等方言控制（Ming 系列）
 - 🎵 **歌声合成**：SoulX-Singer 人声 / 旋律 / 伴奏条件合成
@@ -82,39 +83,35 @@ vllm-omni serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
 | `timeout` | 请求超时时间（秒），长文本建议调大 | `300.0` |
 | `if_random_tts` | 是否开启随机语音回复 | `false` |
 | `random_tts_factor` | 随机因子，越大越易触发（范围建议 0 ~ 1） | `0.4` |
+| `max_concurrency` | 同时进行的 TTS 请求上限，单卡建议 1；超出时随机语音自动跳过 | `1` |
+| `retry_times` | 请求失败重试次数（0.5s、1s… 退避；配置类错误不重试） | `1` |
 
-**模型与音色设置（model_config）**
+**模型与音色设置（model_config + 各模型配置分节）**
 
-| 配置项 | 说明 | 适用模型 |
+`model_config` 只保留全局项，其余参数按模型拆分到独立分节（如 `voxtral_tts`、`qwen3_base`、`soulxsinger`）。WebUI 会根据 `use_model` 自动显示当前模型的分节，分节中的同名键优先级高于 `model_config`。
+
+| 配置项 | 说明 | 默认值 |
 |---|---|---|
-| `use_model` | 模型分发器选择 | 全部 |
-| `model` | 模型名称（仅日志展示） | 全部 |
-| `audio_encode` | 参考音频编码，`utf-8`（默认）或 `ascii`（Higgs 系列） | 全部 |
-| `ref_audio` | 音色参考音频，≤10MB 且 <30s，本地路径或 URL | 支持克隆的模型 |
-| `ref_text` | 参考音频台词（建议填写，风味更佳） | 支持克隆的模型 |
-| `voice` | 预设音色名称 / 上传音色 / Ming IP 标签 | Qwen3 / IndexTTS-2 / Voxtral / OmniVoice / Ming / VoxCPM2 |
-| `speaker` | Qwen3 说话人（如 `vivian`、`ryan`、`aiden`） | Qwen3-TTS |
-| `task_type` | Qwen3 任务类型：`CustomVoice` / `VoiceDesign` / `Base` | Qwen3-TTS |
-| `language` | 语言提示（Chinese / English / French 等） | Qwen3 / OmniVoice |
-| `dialect` | 方言控制（如 `广粤话`），映射到 API `language` 字段 | Ming-omni-tts |
-| `instructions` | 风格/情感自由文本指令 | Qwen3 / Ming / OmniVoice / Ming-flash |
-| `instruction_json` | 结构化指令 JSON，与 `instructions` 互斥 | Ming 系列 |
-| `stream` | 启用流式输出（PCM） | 支持流式的模型 |
-| `response_format` | 输出格式：`wav` / `mp3` / `flac` / `pcm` / `aac` / `opus` | 全部 |
-| `max_new_tokens` | 最大生成 Token 数 | Higgs / GLM / Qwen3 / MOSS / Ming |
-| `seed` | 随机种子（确定性输出） | Higgs / OmniVoice |
-| `speaker_embedding` | 说话人嵌入 JSON 文件（Ming 需 192 维；Qwen3 Base 预计算嵌入） | Ming / Qwen3-Base |
-| `x_vector_only` | 仅使用 x-vector 模式（关闭 ICL） | Qwen3-Base |
-| `emo_audio` | 情感参考音频 | IndexTTS-2 |
-| `emo_text` | 情感描述文本 | IndexTTS-2 |
-| `emo_alpha` | 情感强度，范围 [0, 1] | IndexTTS-2 |
-| `use_emo_text` | 从文本推断情感 | IndexTTS-2 |
-| `use_random` | 使用随机情感原型 | IndexTTS-2 |
-| `prompt_audio` | 提示人声音频（歌词/旋律条件） | SoulX-Singer |
-| `target_audio` | 目标伴奏音频 | SoulX-Singer |
+| `use_model` | 模型分发器选择（同时决定显示哪个模型分节） | `Qwen3-TTS-CustomVoice` |
+| `model` | 模型名称（仅本地日志记录） | 空 |
+| `response_format` | 输出格式：`wav` / `mp3` / `flac` / `pcm` / `aac` / `opus` | `wav` |
+| `stream` | 启用流式输出（启用后 `response_format` 强制为 `pcm`，返回前自动补 WAV 头） | `false` |
+| `stream_format` | 流式分片格式，官方示例固定为 `audio` | `audio` |
+| `stream_sample_rate` | 流式 PCM 采样率（Hz），`0` = 使用内置模型表；未知采样率时自动回退非流式 | `0` |
+
+各模型分节内的字段与「支持的模型」表格中的关键参数一一对应，例如：
+
+| 分节 | 主要字段 |
+|---|---|
+| `qwen3_custom_voice` | `voice`（预设音色，如 `vivian` 等）、`language`、`instructions`、`max_new_tokens`、`non_streaming_mode` |
+| `qwen3_voice_design` | `instructions`（必填）、`language`、`max_new_tokens`、`non_streaming_mode` |
+| `qwen3_base` | `ref_audio`、`ref_text`、`speaker_embedding`、`x_vector_only`、`voice`、`language`、`max_new_tokens`、`non_streaming_mode` |
+| `ming_tts` | `ref_audio`（可多文件）、`ref_text`、`voice`、`dialect`、`instructions` / `instruction_json`、`speaker_embedding` |
+| `indextts2` | `voice`、`emo_audio`、`emo_text`、`emo_alpha`、`use_emo_text`、`use_random`、`emo_vector` |
+| `soulxsinger` | `prompt_audio` / `prompt_audio_data_url`、`target_audio`、`language`、`control`、`svc`、`vocal_sep`、`auto_shift` |
 
 > [!TIP]
-> `ref_audio`、`speaker_embedding`、`emo_audio` 等文件类字段，可填写相对于 `data/plugin_data/astrbot_plugins_tts_vllm_omni/` 的相对路径，也可以直接填写 `http(s)` / `data:` URL。插件启动时会自动校验参考音频是否存在。
+> `ref_audio`、`speaker_embedding`、`emo_audio`、`prompt_audio`、`target_audio`、`prompt_audio_data_url` 等文件类字段，可填写相对于 `data/plugin_data/astrbot_plugins_tts_vllm_omni/` 的相对路径，也可以直接填写 `http(s)` / `data:` URL。插件启动时会自动校验参考音频是否存在。`speaker_embedding` 的 URL / data URI 会在请求前自动下载或解码；SoulX-Singer 的内联提示音频格式由 data URI 的 MIME 推导，无需手工指定。
 
 ## 使用方式
 
@@ -136,7 +133,7 @@ vllm-omni serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
 
 ### Qwen3-TTS（CustomVoice / VoiceDesign / Base）
 
-- **CustomVoice**：`use_model=Qwen3-TTS-CustomVoice`，填写 `speaker` 或 `voice` 使用预设音色
+- **CustomVoice**：`use_model=Qwen3-TTS-CustomVoice`，在 `qwen3_custom_voice` 分节填写 `voice`（如 `vivian`、`ryan`、`aiden`，可用音色可通过 `<服务器>/v1/audio/voices` 查询）使用预设音色
 - **VoiceDesign**：`use_model=Qwen3-TTS-VoiceDesign`，在 `instructions` 中描述期望的音色特征
 - **Base（音色克隆）**：`use_model=Qwen3-TTS-Base`，提供 `ref_audio` + `ref_text`，或将预计算好的说话人嵌入 JSON 填入 `speaker_embedding`；需要关闭 ICL 模式时开启 `x_vector_only`
 
@@ -146,7 +143,7 @@ vllm-omni serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
 
 ### Higgs Audio v2 / v3
 
-`audio_encode` 必须设置为 `ascii`，否则服务端会解析失败。使用 `seed` 可复现确定性输出。
+参考音频由插件以 `ascii` base64 编码后上传（否则服务端会解析失败），使用 `seed` 可复现确定性输出。
 
 ### IndexTTS-2
 
@@ -154,23 +151,26 @@ vllm-omni serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
 
 ### SoulX-Singer（歌声合成）
 
-走 `/v1/chat/completions` 接口。通过 `prompt_audio` 提供人声/旋律条件音频，通过 `target_audio` 提供目标伴奏，实现指定伴奏的歌声合成。
+走 `/v1/chat/completions` 接口。通过 `prompt_audio` 提供人声/旋律条件音频，通过 `target_audio` 提供目标伴奏，实现指定伴奏的歌声合成。`prompt_audio_data_url` 用于内联提示音频：本地 `.wav` 与 `http(s)` URL 都会由插件编码成 data URI 后随请求发送（适合插件与服务器不在同一台机器）。
 
 ## 常见问题
 
-**Q：请求超时 / 报错 `Error 401/404`？**
+**Q：请求超时 / 报错 `Error 401/404`？**</br>
 A：确认 `base_url` 与 `port` 指向的地址可访问（`curl http://<host>:<port>/v1/audio/speech`），并检查防火墙。API 密钥一般填 `EMPTY` 即可。
 
-**Q：提示参考音频格式错误？**
-A：多数模型要求 `ref_audio` 为 `.wav` 格式，且大小不超过 10MB、时长不超过 30s。Higgs 系列还需要将 `audio_encode` 设为 `ascii`。
+**Q：提示参考音频格式错误？**</br>
+A：多数模型要求 `ref_audio` 为 `.wav` 格式，且大小不超过 10MB、时长不超过 30s。Higgs 系列所需的 `ascii` 编码差异由插件自动处理。
 
-**Q：配置了 `use_model` 但请求失败，报 "Unknown use_model"？**
+**Q：配置了 `use_model` 但请求失败，报 "Unknown use_model"？**</br>
 A：请使用插件内置模型列表中的精确名称（见上文"支持的模型"表格第一列），注意大小写。
 
-**Q：随机 TTS 没有生效？**
+**Q：开启 `stream` 后为什么提示回退为非流式？**</br>
+A：流式响应是裸 PCM，需要采样率才能补上 WAV 头。插件内置表只收录了已确认的模型（Qwen3 / GLM 为 24000、Fish Speech 为 44100、MOSS-TTS-Nano 为 48000），其他模型请在 `stream_sample_rate` 中填写实际采样率后再启用流式。若服务端不支持流式，插件会自动退回非流式重试。
+
+**Q：随机 TTS 没有生效？**</br>
 A：确认已开启 `if_random_tts`，且 `random_tts_factor` 大于 0。该功能只对纯文本回复生效，且要求 TTS 服务可达。
 
-**Q：远程主机拒绝连接？**
+**Q：远程主机拒绝连接？**</br>
 A：确认地址可以ping通且防火墙设置了放行规则
 
 ## 性能

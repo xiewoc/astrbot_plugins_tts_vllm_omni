@@ -37,11 +37,23 @@
                 "type": "float",
                 "default": 0.4,
                 "hint": "因子越大越易触发"
+            },
+            "max_concurrency": {
+                "description": "并发请求上限",
+                "type": "int",
+                "default": 1,
+                "hint": "同时进行的 TTS 请求数量上限，单卡建议保持 1；超出时随机语音会自动跳过而不是排队"
+            },
+            "retry_times": {
+                "description": "失败重试次数",
+                "type": "int",
+                "default": 1,
+                "hint": "请求失败后按 0.5s、1s… 退避重试；配置类错误（如缺少 ref_audio）不会重试"
             }
         }
     },
     "model_config": {
-        "description": "模型与音色设置",
+        "description": "模型选择与通用输出",
         "type": "object",
         "items": {
             "use_model": {
@@ -54,6 +66,7 @@
                     "Fish Speech S2 Pro",
                     "Voxtral TTS",
                     "CosyVoice3",
+                    "GLM-TTS",
                     "OmniVoice",
                     "VoxCPM2",
                     "MOSS-TTS-Nano",
@@ -65,91 +78,13 @@
                     "SoulX-Singer"
                 ],
                 "default": "Qwen3-TTS-CustomVoice",
-                "hint": "选择 TTS 模型分派器；服务器实际模型以 vLLM 启动参数为准"
+                "hint": "选择后下方会显示该模型专属的配置分节；实际加载的模型仍以 vLLM-Omni 启动参数为准"
             },
             "model": {
                 "description": "模型名称（仅日志记录）",
                 "type": "string",
                 "default": "",
                 "hint": "仅供日志展示与本地分派区分，不会上传至服务器"
-            },
-            "audio_encode": {
-                "description": "参考音频编码方式",
-                "type": "string",
-                "options": [
-                    "utf-8",
-                    "ascii"
-                ],
-                "default": "utf-8",
-                "hint": "绝大多数模型使用 utf-8；Higgs 系列需使用 ascii"
-            },
-            "ref_audio": {
-                "description": "音色参考音频",
-                "type": "file",
-                "default": [],
-                "file_types": [
-                    "wav"
-                ],
-                "hint": "大小不可超过 10MB 且长度小于 30s；URL 或本地路径均可"
-            },
-            "ref_text": {
-                "description": "参考音频的内容（台词）",
-                "type": "text",
-                "default": "",
-                "hint": "建议填写，风味更佳；MOSS-TTS-Nano 会忽略此项"
-            },
-            "voice": {
-                "description": "预设音色名称",
-                "type": "string",
-                "default": "",
-                "hint": "Voxtral / IndexTTS-2 上传音色 / Ming 说话人 ID 等使用"
-            },
-            "speaker": {
-                "description": "Qwen3 说话人",
-                "type": "string",
-                "default": "",
-                "hint": "Qwen3-TTS 预设说话人：vivian、ryan、aiden 等"
-            },
-            "task_type": {
-                "description": "Qwen3 任务类型",
-                "type": "string",
-                "options": [
-                    "CustomVoice",
-                    "VoiceDesign",
-                    "Base"
-                ],
-                "default": "CustomVoice",
-                "hint": "CustomVoice 预设音色；VoiceDesign 按描述生成；Base 音色克隆"
-            },
-            "language": {
-                "description": "语言提示",
-                "type": "string",
-                "default": "",
-                "hint": "Qwen3 / OmniVoice 使用，如 Chinese、English、French"
-            },
-            "dialect": {
-                "description": "方言控制",
-                "type": "string",
-                "default": "",
-                "hint": "Ming-omni-tts 使用，映射到 API language 字段，如 广粤话"
-            },
-            "instructions": {
-                "description": "风格/情感指令",
-                "type": "text",
-                "default": "",
-                "hint": "Qwen3 / Ming / OmniVoice / Ming-flash 使用，自由文本"
-            },
-            "instruction_json": {
-                "description": "结构化指令 JSON",
-                "type": "text",
-                "default": "",
-                "hint": "Ming 系列可用，与 instructions 互斥"
-            },
-            "stream": {
-                "description": "启用流式输出",
-                "type": "bool",
-                "default": false,
-                "hint": "流式时输出为 output.pcm，供流式传输使用"
             },
             "response_format": {
                 "description": "音频输出格式",
@@ -163,34 +98,511 @@
                     "opus"
                 ],
                 "default": "wav",
-                "hint": "流式模式下强制为 pcm"
+                "hint": "流式模式下强制为 pcm；SoulX-Singer 不使用该字段"
+            },
+            "stream": {
+                "description": "启用流式输出",
+                "type": "bool",
+                "default": false,
+                "hint": "仅部分模型支持（Qwen3 / Fish Speech / GLM / Voxtral / CosyVoice3 / OmniVoice / MOSS / Ming-omni）；不支持或流式采样率未知时插件会回退为非流式并记录警告"
+            },
+            "stream_format": {
+                "description": "流式音频封装格式",
+                "type": "string",
+                "options": [
+                    "audio"
+                ],
+                "default": "audio",
+                "hint": "仅在启用流式输出时随请求发送，官方示例固定为 audio（同时 response_format 会被强制为 pcm）"
+            },
+            "stream_sample_rate": {
+                "description": "流式 PCM 采样率（Hz）",
+                "type": "int",
+                "default": 0,
+                "hint": "0 表示使用内置模型表（Qwen3/GLM 24000、Fish Speech 44100、MOSS-TTS-Nano 48000）；未收录模型采样率未知时会自动回退为非流式，确认采样率后可在此填写以启用流式"
+            }
+        }
+    },
+    "qwen3_custom_voice": {
+        "description": "Qwen3-TTS-CustomVoice 预设音色",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Qwen3-TTS-CustomVoice"
+        },
+        "items": {
+            "voice": {
+                "description": "预设音色",
+                "type": "string",
+                "default": "vivian",
+                "hint": "对应 API voice 字段，可用音色可通过 <服务器>/v1/audio/voices 查询，如 vivian、ryan、aiden"
+            },
+            "language": {
+                "description": "语言提示",
+                "type": "string",
+                "options": [
+                    "Auto",
+                    "Chinese",
+                    "English",
+                    "Japanese",
+                    "Korean",
+                    "German",
+                    "French",
+                    "Russian",
+                    "Portuguese",
+                    "Spanish",
+                    "Italian"
+                ],
+                "default": "Auto",
+                "hint": "Auto 表示由模型自动判定"
+            },
+            "instructions": {
+                "description": "风格/情感指令",
+                "type": "text",
+                "default": "",
+                "hint": "可选，自由文本补充语气描述"
             },
             "max_new_tokens": {
                 "description": "最大生成 Token 数",
                 "type": "int",
-                "default": 300,
-                "hint": "Higgs / GLM / Qwen3 / MOSS 使用"
+                "default": 1024,
+                "hint": "音频被截断时适量调高，不要超过服务端 --max-model-len"
             },
-            "seed": {
-                "description": "随机种子",
+            "non_streaming_mode": {
+                "description": "非流式生成模式",
+                "type": "bool",
+                "default": true,
+                "hint": "Qwen3-TTS 服务端参数，保持开启可避免长文本被切分（官方示例脚本同样开启）"
+            }
+        }
+    },
+    "qwen3_voice_design": {
+        "description": "Qwen3-TTS-VoiceDesign 音色设计",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Qwen3-TTS-VoiceDesign"
+        },
+        "items": {
+            "instructions": {
+                "description": "音色描述（必填）",
+                "type": "text",
+                "default": "",
+                "hint": "描述期望的音色特征，例如「低沉磁性的中年男声」"
+            },
+            "language": {
+                "description": "语言提示",
+                "type": "string",
+                "options": [
+                    "Auto",
+                    "Chinese",
+                    "English",
+                    "Japanese",
+                    "Korean",
+                    "German",
+                    "French",
+                    "Russian",
+                    "Portuguese",
+                    "Spanish",
+                    "Italian"
+                ],
+                "default": "Auto",
+                "hint": "Auto 表示由模型自动判定"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
                 "type": "int",
-                "default": 42,
-                "hint": "Higgs 用于确定性输出"
+                "default": 1024,
+                "hint": "音频被截断时适量调高，不要超过服务端 --max-model-len"
+            },
+            "non_streaming_mode": {
+                "description": "非流式生成模式",
+                "type": "bool",
+                "default": true,
+                "hint": "Qwen3-TTS 服务端参数，保持开启可避免长文本被切分（官方示例脚本同样开启）"
+            }
+        }
+    },
+    "qwen3_base": {
+        "description": "Qwen3-TTS-Base 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Qwen3-TTS-Base"
+        },
+        "items": {
+            "voice": {
+                "description": "预计算音色名",
+                "type": "string",
+                "default": "",
+                "hint": "可选：服务端 /v1/audio/voices 中已注册音色，与 ref_audio、speaker_embedding 三选一"
+            },
+            "ref_audio": {
+                "description": "音色参考音频（必填）",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "大小不可超过 10MB 且长度小于 30s；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "与 ref_audio 配套，ICL 模式建议填写"
             },
             "speaker_embedding": {
-                "description": "说话人嵌入文件",
+                "description": "说话人嵌入 JSON",
                 "type": "file",
                 "default": [],
                 "file_types": [
                     "json"
                 ],
-                "hint": "Ming 需 192 维 JSON；Qwen3 Base 为预计算嵌入"
+                "hint": "可替代 ref_audio 的预计算嵌入，维度需与服务端模型匹配；支持本地 JSON 文件、http(s) URL 或 data URI"
             },
             "x_vector_only": {
                 "description": "仅使用 x-vector 模式",
                 "type": "bool",
                 "default": false,
-                "hint": "Qwen3 Base 克隆时使用，关闭 ICL 模式"
+                "hint": "开启后请求携带 x_vector_only_mode，关闭 ICL 模式"
+            },
+            "language": {
+                "description": "语言提示",
+                "type": "string",
+                "options": [
+                    "Auto",
+                    "Chinese",
+                    "English",
+                    "Japanese",
+                    "Korean",
+                    "German",
+                    "French",
+                    "Russian",
+                    "Portuguese",
+                    "Spanish",
+                    "Italian"
+                ],
+                "default": "Auto",
+                "hint": "Auto 表示由模型自动判定"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 1024,
+                "hint": "音频被截断时适量调高，不要超过服务端 --max-model-len"
+            },
+            "non_streaming_mode": {
+                "description": "非流式生成模式",
+                "type": "bool",
+                "default": true,
+                "hint": "Qwen3-TTS 服务端参数，保持开启可避免长文本被切分（官方示例脚本同样开启）"
+            }
+        }
+    },
+    "fish_speech": {
+        "description": "Fish Speech S2 Pro 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Fish Speech S2 Pro"
+        },
+        "items": {
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "大小不可超过 10MB 且长度小于 30s；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "建议填写，风味更佳"
+            }
+        }
+    },
+    "voxtral_tts": {
+        "description": "Voxtral TTS 预设音色 / 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Voxtral TTS"
+        },
+        "items": {
+            "voice": {
+                "description": "预设音色",
+                "type": "string",
+                "default": "casual_female",
+                "hint": "如 casual_female、neutral_male、cheerful_female、fr_female 等；可用 <服务器>/v1/audio/voices 查询"
+            },
+            "cfg_alpha": {
+                "description": "CFG 强度",
+                "type": "float",
+                "default": 1.2,
+                "hint": "通过 extra_params.cfg_alpha 上传；官方推荐区间 1.0 ~ 2.0，默认 1.2"
+            },
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "填写后走音色克隆，可覆盖 voice"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "与 ref_audio 配套"
+            }
+        }
+    },
+    "cosyvoice3": {
+        "description": "CosyVoice3 零样本音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "CosyVoice3"
+        },
+        "items": {
+            "ref_audio": {
+                "description": "音色参考音频（必填）",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "小于 30s；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的台词（必填）",
+                "type": "text",
+                "default": "",
+                "hint": "CosyVoice3 没有内置音色，必须与 ref_audio 同时提供"
+            }
+        }
+    },
+    "glm_tts": {
+        "description": "GLM-TTS 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "GLM-TTS"
+        },
+        "items": {
+            "ref_audio": {
+                "description": "音色参考音频（必填）",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "本地文件仅支持 .wav；也可直接填写 http(s) / data: URL"
+            },
+            "ref_text": {
+                "description": "参考音频的台词（必填）",
+                "type": "text",
+                "default": "",
+                "hint": "GLM-TTS 必须与 ref_audio 同时提供"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 1024,
+                "hint": "音频被截断时适量调高，不要超过服务端 --max-model-len"
+            }
+        }
+    },
+    "omnivoice": {
+        "description": "OmniVoice 音色克隆 / 风格指令",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "OmniVoice"
+        },
+        "items": {
+            "voice": {
+                "description": "预设音色",
+                "type": "string",
+                "default": "",
+                "hint": "留空为自动音色；填写时需与服务端 /v1/audio/voices 中的音色名一致"
+            },
+            "language": {
+                "description": "语言提示",
+                "type": "string",
+                "default": "",
+                "hint": "留空自动判定，如 Chinese、English、French"
+            },
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "填写后走零样本克隆；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "可选，与 ref_audio 配套"
+            },
+            "instructions": {
+                "description": "风格指令",
+                "type": "text",
+                "default": "",
+                "hint": "可选，自由文本描述音色风格"
+            },
+            "seed": {
+                "description": "随机种子",
+                "type": "int",
+                "default": 42,
+                "hint": "通过 extra_params.seed 上传，相同种子输出可复现"
+            }
+        }
+    },
+    "voxcpm2": {
+        "description": "VoxCPM2 音色克隆 / 音色设计",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "VoxCPM2"
+        },
+        "items": {
+            "control_instruction": {
+                "description": "音色/风格描述",
+                "type": "text",
+                "default": "",
+                "hint": "可选，会按「(描述)文本」拼接后发送，用于音色设计或可控克隆"
+            },
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "留空则仅按描述生成音色；URL 或本地路径均可"
+            }
+        }
+    },
+    "moss_tts_nano": {
+        "description": "MOSS-TTS-Nano 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "MOSS-TTS-Nano"
+        },
+        "items": {
+            "ref_audio": {
+                "description": "音色参考音频（必填）",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "没有内置音色，必须提供 10~30s 参考音频；URL 或本地路径均可"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 1024,
+                "hint": "音频被截断时适量调高，不要超过服务端 --max-model-len"
+            }
+        }
+    },
+    "higgs_audio_v2": {
+        "description": "Higgs Audio v2 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Higgs Audio v2"
+        },
+        "items": {
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "参考音频使用 ascii base64 编码；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "与 ref_audio 配套提供"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 300,
+                "hint": "Higgs Audio v2 官方客户端默认 300，音频被截断时适量调高"
+            },
+            "seed": {
+                "description": "随机种子",
+                "type": "int",
+                "default": 42,
+                "hint": "相同种子输出可复现"
+            }
+        }
+    },
+    "higgs_audio_v3": {
+        "description": "Higgs Audio v3 音色克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Higgs Audio v3"
+        },
+        "items": {
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "参考音频使用 ascii base64 编码；URL 或本地路径均可"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "与 ref_audio 配套提供"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 2048,
+                "hint": "Higgs Audio v3 官方客户端默认 2048，音频被截断时适量调高"
+            },
+            "seed": {
+                "description": "随机种子",
+                "type": "int",
+                "default": 42,
+                "hint": "相同种子输出可复现"
+            }
+        }
+    },
+    "indextts2": {
+        "description": "IndexTTS-2 音色克隆与情感控制",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "IndexTTS-2"
+        },
+        "items": {
+            "voice": {
+                "description": "上传音色名称",
+                "type": "string",
+                "default": "",
+                "hint": "与服务端上传的音色名一致；与 ref_audio 至少填一个"
+            },
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav",
+                    "mp3",
+                    "flac",
+                    "ogg"
+                ],
+                "hint": "与 voice 至少填一个；URL 或本地路径均可"
             },
             "emo_audio": {
                 "description": "情感参考音频",
@@ -202,51 +614,226 @@
                     "flac",
                     "ogg"
                 ],
-                "hint": "IndexTTS-2 情感条件控制"
+                "hint": "通过 extra_params.emo_audio 上传，用于情感条件控制"
             },
             "emo_text": {
                 "description": "情感描述文本",
-                "type": "string",
+                "type": "text",
                 "default": "",
-                "hint": "IndexTTS-2 情感文本"
+                "hint": "通过 extra_params.emo_text 上传"
+            },
+            "emo_vector": {
+                "description": "8 维情感向量",
+                "type": "text",
+                "default": "",
+                "hint": "英文逗号分隔的 8 个数值，顺序为 happy, angry, sad, afraid, disgusted, melancholic, surprised, calm，例如 0,0,0,0,0,0,0,1"
             },
             "emo_alpha": {
                 "description": "情感强度",
                 "type": "float",
                 "default": 0.0,
-                "hint": "IndexTTS-2 情感权重，范围 [0, 1]"
+                "hint": "范围 [0, 1]，0 表示不带情感"
             },
             "use_emo_text": {
                 "description": "从文本推断情感",
                 "type": "bool",
                 "default": false,
-                "hint": "IndexTTS-2：从 emo_text 或文本推断情感向量"
+                "hint": "从 emo_text 或待合成文本推断情感向量"
             },
             "use_random": {
                 "description": "使用随机情感原型",
                 "type": "bool",
                 "default": false,
-                "hint": "IndexTTS-2 随机情感"
+                "hint": "随机抽取情感原型"
+            }
+        }
+    },
+    "ming_tts": {
+        "description": "Ming-omni-tts 预设音色 / 多说话人克隆",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Ming-omni-tts"
+        },
+        "items": {
+            "voice": {
+                "description": "预设音色 / 上传音色名",
+                "type": "string",
+                "default": "",
+                "hint": "内置角色音色（映射 Ming IP）或上传的音色样本名"
+            },
+            "task_type": {
+                "description": "任务类型",
+                "type": "string",
+                "options": [
+                    "CustomVoice",
+                    "VoiceDesign",
+                    "Base"
+                ],
+                "default": "CustomVoice",
+                "hint": "CustomVoice 预设音色；VoiceDesign 描述生成；Base 音色克隆"
+            },
+            "dialect": {
+                "description": "方言控制",
+                "type": "string",
+                "default": "",
+                "hint": "映射到 API language 字段，如 广粤话"
+            },
+            "instructions": {
+                "description": "风格/情感指令",
+                "type": "text",
+                "default": "",
+                "hint": "自由文本指令，与 instruction_json 互斥"
+            },
+            "instruction_json": {
+                "description": "结构化指令 JSON",
+                "type": "text",
+                "default": "",
+                "hint": "与 instructions 互斥，填写后优先使用"
+            },
+            "ref_audio": {
+                "description": "音色参考音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "支持多个文件（播客式多说话人）；配合 ref_text 中的 speaker_1: 台词 使用"
+            },
+            "ref_text": {
+                "description": "参考音频的台词",
+                "type": "text",
+                "default": "",
+                "hint": "提供 ref_text 时必须同时提供 ref_audio"
+            },
+            "speaker_embedding": {
+                "description": "说话人嵌入 JSON",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "json"
+                ],
+                "hint": "192 维 JSON 列表；不能与多个 ref_audio 同时使用；支持本地 JSON 文件、http(s) URL 或 data URI"
+            },
+            "max_new_tokens": {
+                "description": "最大生成 Token 数",
+                "type": "int",
+                "default": 1024,
+                "hint": "覆盖服务端 ming_max_decode_steps"
+            }
+        }
+    },
+    "ming_flash_omni_tts": {
+        "description": "Ming-flash-omni-TTS 风格控制",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "Ming-flash-omni-TTS"
+        },
+        "items": {
+            "instructions": {
+                "description": "风格/情感指令",
+                "type": "text",
+                "default": "",
+                "hint": "自由文本指令，与 instruction_json 互斥"
+            },
+            "instruction_json": {
+                "description": "结构化指令 JSON",
+                "type": "text",
+                "default": "",
+                "hint": "与 instructions 互斥，填写后优先使用"
+            }
+        }
+    },
+    "soulxsinger": {
+        "description": "SoulX-Singer 歌声合成",
+        "type": "object",
+        "condition": {
+            "model_config.use_model": "SoulX-Singer"
+        },
+        "items": {
+            "language": {
+                "description": "演唱语言",
+                "type": "string",
+                "default": "Mandarin",
+                "hint": "如 Mandarin、English、Cantonese；SVC 模式下忽略"
+            },
+            "control": {
+                "description": "条件类型",
+                "type": "string",
+                "options": [
+                    "melody",
+                    "score"
+                ],
+                "default": "melody",
+                "hint": "melody 依据旋律生成，score 依据曲谱生成；SVC 模式下忽略"
+            },
+            "svc": {
+                "description": "SVC 歌声转换模式",
+                "type": "bool",
+                "default": false,
+                "hint": "使用 target_audio 中的人声替换音色，此时不发送 language/control"
             },
             "prompt_audio": {
-                "description": "提示人声音频（SoulX-Singer）",
+                "description": "提示音频（旋律/歌词条件）",
                 "type": "file",
                 "default": [],
                 "file_types": [
-                    "wav",
-                    "mp3"
+                    "wav"
                 ],
-                "hint": "SoulX-Singer 歌词/旋律条件音频"
+                "hint": "本地路径需服务器可见；URL 或 data: URI 会直接透传"
             },
             "target_audio": {
-                "description": "目标伴奏音频（SoulX-Singer）",
+                "description": "目标演唱音频",
                 "type": "file",
                 "default": [],
                 "file_types": [
-                    "wav",
-                    "mp3"
+                    "wav"
                 ],
-                "hint": "SoulX-Singer 目标伴奏，服务器可达路径"
+                "hint": "SVC 模式必填；本地路径需服务器可见，URL 或 data: URI 会直接透传"
+            },
+            "prompt_audio_data_url": {
+                "description": "内联提示音频",
+                "type": "file",
+                "default": [],
+                "file_types": [
+                    "wav"
+                ],
+                "hint": "本地 .wav 会转 ascii base64 内联到请求中，适合插件与服务器不在同一台机器；填写 http(s) URL 时插件会先下载该音频再内联"
+            },
+            "preprocess_weights_dir": {
+                "description": "预处理权重目录",
+                "type": "string",
+                "default": "",
+                "hint": "服务端上的集成预处理权重目录，留空使用服务端默认"
+            },
+            "vocal_sep": {
+                "description": "人声分离",
+                "type": "bool",
+                "default": false,
+                "hint": "开启后先从 target_audio 分离人声"
+            },
+            "auto_shift": {
+                "description": "自动变调",
+                "type": "bool",
+                "default": true,
+                "hint": "自动把旋律对齐到目标音域"
+            },
+            "num_inference_steps": {
+                "description": "扩散采样步数",
+                "type": "int",
+                "default": 32,
+                "hint": "越大质量越高、耗时越长"
+            },
+            "guidance_scale": {
+                "description": "CFG 引导强度",
+                "type": "float",
+                "default": 3.0,
+                "hint": "控制对条件音频的贴合程度"
+            },
+            "seed": {
+                "description": "随机种子",
+                "type": "int",
+                "default": 42,
+                "hint": "相同种子输出可复现"
             }
         }
     }
