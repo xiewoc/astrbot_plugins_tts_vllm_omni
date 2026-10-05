@@ -151,7 +151,7 @@ vllm-omni serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
 
 ### SoulX-Singer（歌声合成）
 
-走 `/v1/chat/completions` 接口。通过 `prompt_audio` 提供人声/旋律条件音频，通过 `target_audio` 提供目标伴奏，实现指定伴奏的歌声合成。
+走 `/v1/chat/completions` 接口。通过 `prompt_audio` 提供人声/旋律条件音频，通过 `target_audio` 提供目标伴奏，实现指定伴奏的歌声合成。`prompt_audio_data_url` 用于内联提示音频：本地 `.wav` 与 `http(s)` URL 都会由插件编码成 data URI 后随请求发送（适合插件与服务器不在同一台机器）。
 
 ## 常见问题
 

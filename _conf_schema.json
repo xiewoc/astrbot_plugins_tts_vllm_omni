@@ -797,7 +797,7 @@
                 "file_types": [
                     "wav"
                 ],
-                "hint": "本地 .wav 会转 ascii base64 内联到请求中，适合插件与服务器不在同一台机器"
+                "hint": "本地 .wav 会转 ascii base64 内联到请求中，适合插件与服务器不在同一台机器；填写 http(s) URL 时插件会先下载该音频再内联"
             },
             "preprocess_weights_dir": {
                 "description": "预处理权重目录",

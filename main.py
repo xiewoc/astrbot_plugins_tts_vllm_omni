@@ -77,14 +77,23 @@ class TTSTool(FunctionTool[AstrAgentContext]):
     # 并发闸门与失败重试次数，由插件 initialize() 按配置注入
     tts_semaphore: Any = Field(default=None)
     retry_times: int = Field(default=1)
+    # 处理中/排队中的请求数：仅在事件循环内同步增减，供随机 TTS 原子判断是否跳过
+    in_flight: int = Field(default=0)
 
     # ---- 安全路径解析 ----
 
     def _safe_resolve_path(self, item, base: Path | None = None) -> str | None:
         """安全地解析文件路径，防止路径遍历攻击。
 
-        确保返回的路径严格位于指定 base 目录内部。
-        如果传入值为空或非法，返回 None。
+        本地文件路径会被解析并确保严格位于 base 目录内部；
+        http(s) URL 与 data URI 并非本地路径，按原值透传给 tts 层处理。
+
+        Args:
+            item: 待解析的值，支持单个路径、路径列表或 None。
+            base: 本地路径必须位于的基准目录，缺省为插件数据目录。
+
+        Returns:
+            可用的路径字符串；URL / data URI 原样返回；值为空、类型非法或越界时返回 None。
         """
         if item is None:
             return None
@@ -169,6 +178,8 @@ class TTSTool(FunctionTool[AstrAgentContext]):
         # TTS 输出统一落在 AstrBot 临时目录，避免插件目录无限堆积音频
         args.output_dir = str(self._get_temp_dir())
         args.model = model.get("model") or model.get("use_model", "unknown")
+        # run_tts 依赖 args.use_model 分派处理器；这里用已 strip 的值，避免首尾空格导致匹配失败
+        args.use_model = use_model
 
         # -- File 类型字段（全部通过安全路径解析）--
         args.ref_audio = self._resolve_ref_audio(model.get("ref_audio"), args.model)
@@ -235,29 +246,34 @@ class TTSTool(FunctionTool[AstrAgentContext]):
         """
         temp_dir = self._get_temp_dir()
         filename: str | None = None
-        for attempt in range(self.retry_times + 1):
-            try:
-                if self.tts_semaphore is None:
-                    filename = await asyncio.to_thread(run_tts, args)
-                else:
-                    async with self.tts_semaphore:
+        # 同步自增 in_flight（到首个 await 之间没有挂起点），随机 TTS 的跳过判断才不会与并发请求竞争
+        self.in_flight += 1
+        try:
+            for attempt in range(self.retry_times + 1):
+                try:
+                    if self.tts_semaphore is None:
                         filename = await asyncio.to_thread(run_tts, args)
-                break
-            except ValueError:
-                # 配置类错误（缺少 ref_audio、模型名错误等）重试没有意义
-                raise
-            except Exception as exc:
-                if attempt >= self.retry_times:
+                    else:
+                        async with self.tts_semaphore:
+                            filename = await asyncio.to_thread(run_tts, args)
+                    break
+                except ValueError:
+                    # 配置类错误（缺少 ref_audio、模型名错误等）重试没有意义
                     raise
-                delay = 0.5 * (2**attempt)
-                logger.warning(
-                    "TTS 请求失败（第 %d/%d 次），%.1fs 后重试: %s",
-                    attempt + 1,
-                    self.retry_times,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
+                except Exception as exc:
+                    if attempt >= self.retry_times:
+                        raise
+                    delay = 0.5 * (2**attempt)
+                    logger.warning(
+                        "TTS 请求失败（第 %d/%d 次），%.1fs 后重试: %s",
+                        attempt + 1,
+                        self.retry_times,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+        finally:
+            self.in_flight -= 1
 
         if not filename:
             raise RuntimeError("TTS 服务未返回音频路径")
@@ -306,13 +322,15 @@ class RandomTTS:
         self._tts_tool = tts_tool
 
     async def maybe_replace(self, chain: list, factor: float) -> list:
-        """若随机命中且消息链为纯文本，则尝试转为语音；失败时回退为原文本。"""
+        """若随机命中且消息链为纯文本，则尝试转为语音；失败时回退为原文本。
+
+        已有 TTS 请求在处理或排队时直接跳过（不排队），避免随机语音堆积。
+        """
         if random() > factor:
             return chain
 
-        # 已有 TTS 请求在跑时不排队，直接跳过本次随机语音
-        semaphore = self._tts_tool.tts_semaphore
-        if semaphore is not None and semaphore.locked():
+        # 已有请求在处理或排队时直接跳过：in_flight 为同步计数，判断与后续自增之间没有 await，不存在竞态
+        if self._tts_tool.in_flight > 0:
             logger.info("TTS 正在处理其他请求，跳过本次随机语音。")
             return chain
 

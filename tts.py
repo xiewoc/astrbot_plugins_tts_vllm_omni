@@ -614,7 +614,16 @@ def _payload_soulxsinger(args) -> dict:
     content: list[dict] = [{"type": "text", "text": "soulx-singer"}]
     prompt_data = _get(args, "prompt_audio_data_url")
     if prompt_data:
-        if not prompt_data.startswith("data:"):
+        prompt_data = str(prompt_data)
+        if prompt_data.startswith(("http://", "https://")):
+            # input_audio.data 只接受内联音频（参见官方客户端 openai_chat_client.py），远程 URL 先下载再编码
+            response = httpx.get(prompt_data, timeout=float(_get(args, "timeout") or 300.0))
+            response.raise_for_status()
+            prompt_data = (
+                "data:audio/wav;base64,"
+                + base64.b64encode(response.content).decode("ascii")
+            )
+        elif not prompt_data.startswith("data:"):
             _ensure_wav_file(prompt_data)
             prompt_data = encode_audio_to_base64_ascii(prompt_data)
         content.append({"type": "input_audio", "input_audio": {"data": prompt_data, "format": "mp3"}})
