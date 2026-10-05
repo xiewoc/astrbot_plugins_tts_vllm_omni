@@ -2,7 +2,9 @@ import base64
 import httpx
 import json
 import uuid
+import wave
 from pathlib import Path
+from typing import Any
 
 from utilize import (
     encode_audio_to_base64_utf8,
@@ -19,8 +21,17 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 
-def _get(args, key, default=None):
-    """Safe attribute access so handlers never explode on missing args."""
+def _get(args, key: str, default: Any = None) -> Any:
+    """Safe attribute access so handlers never explode on missing args.
+
+    Args:
+        args: 参数命名空间（SimpleNamespace 等）。
+        key: 要读取的属性名。
+        default: 属性不存在时的回退值。
+
+    Returns:
+        属性值；属性不存在时返回 default。
+    """
     return getattr(args, key, default)
 
 
@@ -74,6 +85,39 @@ def _encode_audio_ref_list(ref_audio, audio_encode: str = "utf-8", require_wav: 
     return _encode_audio_ref(ref_audio, audio_encode, require_wav)
 
 
+# 流式响应是裸 PCM，采样率取自 text_to_speech/README.md 中各模型的官方说明。
+# 未收录的模型采样率未知，会回退为非流式，避免输出变速音频；也可用 stream_sample_rate 覆盖。
+_STREAM_PCM_RATES = {
+    "Qwen3-TTS-CustomVoice": 24000,
+    "Qwen3-TTS-VoiceDesign": 24000,
+    "Qwen3-TTS-Base": 24000,
+    "qwen3_tts": 24000,
+    "GLM-TTS": 24000,
+    "glm_tts": 24000,
+    "Fish Speech S2 Pro": 44100,
+    "fish_speech": 44100,
+    "MOSS-TTS-Nano": 48000,
+    "moss_tts_nano": 48000,
+}
+
+
+def _stream_sample_rate(args) -> int:
+    """获取流式 PCM 的采样率。
+
+    优先使用 stream_sample_rate 配置，其次查询内置模型表。
+
+    Args:
+        args: 参数命名空间（SimpleNamespace 等）。
+
+    Returns:
+        采样率（Hz）；无法确定时返回 0。
+    """
+    override = int(_get(args, "stream_sample_rate", 0) or 0)
+    if override > 0:
+        return override
+    return _STREAM_PCM_RATES.get(str(_get(args, "use_model", "") or ""), 0)
+
+
 def _speech_request(args, payload: dict) -> str:
     """共享 POST /v1/audio/speech 请求（支持流式），成功返回输出文件路径，失败抛出异常。"""
     api_url = f"{args.api_base}/v1/audio/speech"
@@ -83,16 +127,19 @@ def _speech_request(args, payload: dict) -> str:
     }
     timeout = float(_get(args, "timeout") or 300.0)
 
-    plugin_dir = Path(__file__).parent / "temp"
-    plugin_dir.mkdir(parents=True, exist_ok=True)
-    if _get(args, "stream", False):
-        output_path = plugin_dir / f"{uuid.uuid4().hex}.pcm"
+    # 输出目录由插件层给出（位于 AstrBot 临时目录下，由核心自动清理）
+    output_dir = Path(_get(args, "output_dir") or (Path(__file__).parent / "temp"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # 仅当 payload 确实要求流式（即该模型支持）时才按流式读取响应
+    streaming = bool(payload.get("stream"))
+    if streaming:
+        output_path = output_dir / f"{uuid.uuid4().hex}.pcm"
     else:
         fmt = str(_get(args, "response_format", "wav") or "wav").lower()
         ext = fmt if fmt in ("wav", "mp3", "flac", "pcm", "aac", "opus") else "wav"
-        output_path = plugin_dir / f"{uuid.uuid4().hex}.{ext}"
+        output_path = output_dir / f"{uuid.uuid4().hex}.{ext}"
 
-    if _get(args, "stream", False):
+    if streaming:
         with httpx.Client(timeout=timeout) as client:
             with client.stream("POST", api_url, json=payload, headers=headers) as resp:
                 if resp.status_code != 200:
@@ -105,7 +152,22 @@ def _speech_request(args, payload: dict) -> str:
                         f.write(chunk)
                         total_bytes += len(chunk)
                 logger.info(f"Streamed {total_bytes} bytes to: {output_path}")
-                return str(output_path)
+                # 流式响应为裸 PCM，补上 WAV 头后才能被消息平台发送
+                sample_rate = _stream_sample_rate(args)
+                if sample_rate <= 0:
+                    raise RuntimeError(
+                        "未知流式 PCM 采样率，无法封装为 WAV；"
+                        "请在插件配置中填写 stream_sample_rate"
+                    )
+                wav_path = output_path.with_suffix(".wav")
+                with wave.open(str(wav_path), "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(sample_rate)
+                    wav_file.writeframes(output_path.read_bytes())
+                output_path.unlink(missing_ok=True)
+                logger.info(f"Wrapped PCM into WAV: {wav_path} ({sample_rate} Hz)")
+                return str(wav_path)
 
     with httpx.Client(timeout=timeout) as client:
         response = client.post(api_url, json=payload, headers=headers)
@@ -168,9 +230,11 @@ def _common_speech_payload(args) -> dict:
         "input": args.text,
         "response_format": _get(args, "response_format", "wav"),
     }
-    speed = _get(args, "speed", 1.0)
-    if speed != 1.0:
-        payload["speed"] = speed
+    # 流式输出不支持 speed（与官方客户端 build_payload 保持一致）
+    if not _get(args, "stream", False):
+        speed = _get(args, "speed", 1.0)
+        if speed != 1.0:
+            payload["speed"] = speed
     initial_chunk = _get(args, "initial_codec_chunk_frames")
     if initial_chunk is not None:
         payload["initial_codec_chunk_frames"] = initial_chunk
@@ -262,9 +326,12 @@ def _payload_higgs_v3(args) -> dict:
 def _payload_indextts2(args) -> dict:
     payload = _common_speech_payload(args)
     voice = _get(args, "voice")
+    ref_audio = _encode_audio_ref(_get(args, "ref_audio"), "utf-8")
+    # 对照官方 speech_client.py：voice 与 ref_audio 至少提供一个
+    if not voice and not ref_audio:
+        raise ValueError("IndexTTS-2 requires ref_audio or voice for voice cloning")
     if voice:
         payload["voice"] = voice
-    ref_audio = _encode_audio_ref(_get(args, "ref_audio"), "utf-8")
     if ref_audio:
         payload["ref_audio"] = ref_audio
 
@@ -279,9 +346,18 @@ def _payload_indextts2(args) -> dict:
     emo_text = _get(args, "emo_text")
     if emo_text:
         extra_params["emo_text"] = emo_text
-    emo_vector = _get(args, "emo_vector")
-    if emo_vector is not None:
-        extra_params["emo_vector"] = emo_vector
+    emo_vector = str(_get(args, "emo_vector") or "").strip()
+    if emo_vector:
+        # 配置中为逗号分隔的 8 维向量，需要转换成数值列表再上传
+        values = [v.strip() for v in emo_vector.replace("，", ",").split(",") if v.strip()]
+        if len(values) != 8:
+            raise ValueError(
+                f"IndexTTS-2: emo_vector 需要 8 个逗号分隔的数值，当前 {len(values)} 个"
+            )
+        try:
+            extra_params["emo_vector"] = [float(v) for v in values]
+        except ValueError as exc:
+            raise ValueError("IndexTTS-2: emo_vector 只能包含数值") from exc
     emo_alpha = _get(args, "emo_alpha")
     if emo_alpha is not None:
         extra_params["emo_alpha"] = emo_alpha
@@ -396,10 +472,21 @@ def _payload_omnivoice(args) -> dict:
     return payload
 
 
+# Qwen3-TTS 各模型对应的默认 task_type（与官方客户端语义一致）
+_QWEN3_TASK_TYPES = {
+    "Qwen3-TTS-CustomVoice": "CustomVoice",
+    "Qwen3-TTS-VoiceDesign": "VoiceDesign",
+    "Qwen3-TTS-Base": "Base",
+}
+
+
 def _payload_qwen3_tts(args) -> dict:
     payload = _common_speech_payload(args)
 
-    task_type = _get(args, "task_type", "Base")
+    # 未显式配置时按所选模型补全，避免用错任务类型
+    task_type = _get(args, "task_type") or _QWEN3_TASK_TYPES.get(
+        _get(args, "use_model"), "CustomVoice"
+    )
     payload["task_type"] = task_type
 
     # ★ 关键：必须调用 _encode_audio_ref 将文件路径转为 Data URL
@@ -429,6 +516,10 @@ def _payload_qwen3_tts(args) -> dict:
             with open(str(se_path), encoding="utf-8") as f:
                 payload["speaker_embedding"] = json.load(f)
 
+    # 对照官方客户端：开启后才发送 x_vector_only_mode
+    if _get(args, "x_vector_only", False):
+        payload["x_vector_only_mode"] = True
+
     non_streaming = _get(args, "non_streaming_mode")
     if non_streaming is not None:
         payload["non_streaming_mode"] = non_streaming
@@ -440,13 +531,20 @@ def _payload_qwen3_tts(args) -> dict:
         payload["stream_format"] = _get(args, "stream_format", "audio")
         payload["response_format"] = "pcm"
 
-    # ★ 只添加用户明确指定的 voice/speaker（不为空时）
-    voice = _get(args, "voice")
+    # ★ 预设音色：服务端规范字段为 voice，历史配置中的 speaker 作为兼容别名
+    voice = _get(args, "voice") or _get(args, "speaker")
     if voice:
         payload["voice"] = voice
-    speaker = _get(args, "speaker")
-    if speaker:
-        payload["speaker"] = speaker
+
+    # 对照官方客户端 tts_common.build_payload：各任务类型的必填项校验
+    if task_type == "VoiceDesign" and not payload.get("instructions"):
+        raise ValueError("Qwen3-TTS VoiceDesign requires instructions to design a voice")
+    if task_type == "Base" and not (
+        ref_audio or payload.get("speaker_embedding") or payload.get("voice")
+    ):
+        raise ValueError(
+            "Qwen3-TTS Base requires ref_audio, speaker_embedding or a precomputed voice"
+        )
 
     return payload
 
@@ -454,6 +552,10 @@ def _payload_qwen3_tts(args) -> dict:
 def _payload_voxcpm2(args) -> dict:
     payload = _common_speech_payload(args)
     payload["voice"] = "default"
+    # 官方客户端使用 "(描述)文本" 前缀实现音色设计 / 可控克隆
+    control_instruction = str(_get(args, "control_instruction") or "").strip()
+    if control_instruction:
+        payload["input"] = f"({control_instruction}){args.text}"
     ref_audio = _encode_audio_ref(_get(args, "ref_audio"), "utf-8")
     if ref_audio:
         payload["ref_audio"] = ref_audio
@@ -471,6 +573,10 @@ def _payload_voxtral_tts(args) -> dict:
     ref_text = _get(args, "ref_text")
     if ref_text:
         payload["ref_text"] = ref_text
+    # 对照 voxtral_tts/gradio_demo.py：CFG 强度通过 extra_params.cfg_alpha 上传
+    cfg_alpha = _get(args, "cfg_alpha")
+    if cfg_alpha is not None:
+        payload["extra_params"] = {"cfg_alpha": cfg_alpha}
     if _get(args, "stream", False):
         payload["stream"] = True
         payload["stream_format"] = _get(args, "stream_format", "audio")
@@ -577,12 +683,40 @@ def run_tts(args) -> str:
 
     payload = handler(args)
 
+    # 流式 PCM 采样率未知时回退非流式：裸 PCM 猜错采样率会变速，宁可不用流式
+    if payload.get("stream") and _stream_sample_rate(args) <= 0:
+        logger.warning(
+            "%s 的流式 PCM 采样率未知，本次请求回退为非流式；"
+            "如确认采样率，可在插件配置中填写 stream_sample_rate。",
+            use_model,
+        )
+        args.stream = False
+        payload = handler(args)
+
+    # 该模型不支持流式时 payload 中不会出现 stream 字段，此处回退为非流式并提示
+    if (
+        _get(args, "stream", False)
+        and not payload.get("stream")
+        and use_model not in ("SoulX-Singer", "soulxsinger")
+    ):
+        logger.warning("%s 不支持流式输出，本次请求已回退为非流式。", use_model)
+
     if use_model in ("SoulX-Singer", "soulxsinger"):
         audio = _chat_request(args, payload)
-        output_path = Path(__file__).parent / f"{uuid.uuid4().hex}.wav"
+        # SoulX-Singer 走 chat completions，返回的是完整 WAV 字节
+        output_dir = Path(_get(args, "output_dir") or (Path(__file__).parent / "temp"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{uuid.uuid4().hex}.wav"
         with open(output_path, "wb") as f:
             f.write(audio)
         logger.info(f"Audio saved to: {output_path}")
         return str(output_path)
 
-    return _speech_request(args, payload)
+    try:
+        return _speech_request(args, payload)
+    except Exception as exc:
+        if not payload.get("stream"):
+            raise
+        logger.warning("流式请求失败（%s），自动回退为非流式重试。", exc)
+        args.stream = False
+        return _speech_request(args, handler(args))

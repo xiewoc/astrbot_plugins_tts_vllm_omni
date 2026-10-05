@@ -1,11 +1,12 @@
 name: astrbot_plugins_tts_vllm_omni
 display_name: TTS_Vllm_Omni
 desc: 一个用于添加Vllm_Omni的文字转语音插件
-version: v1.0.1
+version: v1.0.2
 author: xiewoc
-repo: https://github.com/xiewoc/astrbot_plugins_tts_vllm_omni
+repo: https://github.com/xiewoc
 support_platforms:
   - aiocqhttp
   - qq_official
 tags: 
   - tts
+  - 语音合成
