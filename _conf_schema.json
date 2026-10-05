@@ -256,7 +256,7 @@
                 "file_types": [
                     "json"
                 ],
-                "hint": "可替代 ref_audio 的预计算嵌入，维度需与服务端模型匹配"
+                "hint": "可替代 ref_audio 的预计算嵌入，维度需与服务端模型匹配；支持本地 JSON 文件、http(s) URL 或 data URI"
             },
             "x_vector_only": {
                 "description": "仅使用 x-vector 模式",
@@ -712,7 +712,7 @@
                 "file_types": [
                     "json"
                 ],
-                "hint": "192 维 JSON 列表；不能与多个 ref_audio 同时使用"
+                "hint": "192 维 JSON 列表；不能与多个 ref_audio 同时使用；支持本地 JSON 文件、http(s) URL 或 data URI"
             },
             "max_new_tokens": {
                 "description": "最大生成 Token 数",

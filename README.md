@@ -111,7 +111,7 @@ vllm-omni serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
 | `soulxsinger` | `prompt_audio` / `prompt_audio_data_url`、`target_audio`、`language`、`control`、`svc`、`vocal_sep`、`auto_shift` |
 
 > [!TIP]
-> `ref_audio`、`speaker_embedding`、`emo_audio`、`prompt_audio`、`target_audio`、`prompt_audio_data_url` 等文件类字段，可填写相对于 `data/plugin_data/astrbot_plugins_tts_vllm_omni/` 的相对路径，也可以直接填写 `http(s)` / `data:` URL。插件启动时会自动校验参考音频是否存在。
+> `ref_audio`、`speaker_embedding`、`emo_audio`、`prompt_audio`、`target_audio`、`prompt_audio_data_url` 等文件类字段，可填写相对于 `data/plugin_data/astrbot_plugins_tts_vllm_omni/` 的相对路径，也可以直接填写 `http(s)` / `data:` URL。插件启动时会自动校验参考音频是否存在。`speaker_embedding` 的 URL / data URI 会在请求前自动下载或解码；SoulX-Singer 的内联提示音频格式由 data URI 的 MIME 推导，无需手工指定。
 
 ## 使用方式
 

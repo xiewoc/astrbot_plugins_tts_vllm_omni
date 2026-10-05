@@ -182,7 +182,7 @@ class TTSTool(FunctionTool[AstrAgentContext]):
         args.use_model = use_model
 
         # -- File 类型字段（全部通过安全路径解析）--
-        args.ref_audio = self._resolve_ref_audio(model.get("ref_audio"), args.model)
+        args.ref_audio = self._resolve_ref_audio(model.get("ref_audio"), use_model)
         args.speaker_embedding = self._resolve_file_field(model.get("speaker_embedding"))
         args.emo_audio = self._resolve_file_field(model.get("emo_audio"))
         args.prompt_audio = self._resolve_file_field(model.get("prompt_audio"))
@@ -257,8 +257,8 @@ class TTSTool(FunctionTool[AstrAgentContext]):
                         async with self.tts_semaphore:
                             filename = await asyncio.to_thread(run_tts, args)
                     break
-                except ValueError:
-                    # 配置类错误（缺少 ref_audio、模型名错误等）重试没有意义
+                except (ValueError, OSError):
+                    # 配置/输入类错误（缺少 ref_audio、嵌入文件不存在、模型名错误等）重试没有意义
                     raise
                 except Exception as exc:
                     if attempt >= self.retry_times:

@@ -1,6 +1,8 @@
 import base64
-import os
 import json
+import os
+
+import httpx
 
 EXPECTED_SPEAKER_EMBEDDING_DIM = 192  # 默认 Ming 系列维度，Qwen3 可能兼容，若不匹配可传入维度参数
 
@@ -66,14 +68,59 @@ def is_error_response(content: bytes) -> str | None:
     return None
 
 
-def load_speaker_embedding(path: str, expected_dim: int = EXPECTED_SPEAKER_EMBEDDING_DIM) -> list[float]:
-    """Load and validate a speaker embedding JSON file. Expected dimension can be overridden."""
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+def read_embedding_json_text(source: str, timeout: float = 300.0) -> str:
+    """Read speaker-embedding JSON text from a local file, URL or data URI.
+
+    Args:
+        source: Local JSON path, http(s) URL, or base64 ``data:`` URI.
+        timeout: Download timeout in seconds for remote sources.
+
+    Returns:
+        The JSON text content.
+
+    Raises:
+        ValueError: The data URI is not base64 encoded or cannot be decoded.
+        httpx.HTTPError: The remote source could not be fetched.
+    """
+    if source.startswith("data:"):
+        header, _, payload = source.partition(",")
+        if "base64" not in header:
+            raise ValueError("speaker_embedding data URI must be base64 encoded")
+        try:
+            # binascii.Error / UnicodeDecodeError are both ValueError subclasses.
+            return base64.b64decode(payload).decode("utf-8")
+        except ValueError as exc:
+            raise ValueError(f"speaker_embedding data URI decode failed: {exc}") from exc
+    if source.startswith(("http://", "https://")):
+        response = httpx.get(source, timeout=timeout)
+        response.raise_for_status()
+        return response.text
+    with open(source, encoding="utf-8") as f:
+        return f.read()
+
+
+def load_speaker_embedding(
+    source: str, expected_dim: int | None = EXPECTED_SPEAKER_EMBEDDING_DIM
+) -> list[float]:
+    """Load and validate a speaker embedding from a local file, URL or data URI.
+
+    Args:
+        source: Local JSON path, http(s) URL, or base64 ``data:`` URI.
+        expected_dim: Expected embedding dimension; pass None to skip the check
+            (Qwen3 and Ming use different dimensions).
+
+    Returns:
+        The embedding as a list of floats.
+
+    Raises:
+        ValueError: The payload is not a JSON list, the dimension mismatches,
+            or an element is not a number.
+    """
+    data = json.loads(read_embedding_json_text(source))
 
     if not isinstance(data, list):
         raise ValueError("speaker_embedding file must contain a JSON list")
-    if len(data) != expected_dim:
+    if expected_dim is not None and len(data) != expected_dim:
         raise ValueError(
             f"Speaker embedding must have {expected_dim} values, got {len(data)}"
         )

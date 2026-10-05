@@ -153,19 +153,25 @@ def _speech_request(args, payload: dict) -> str:
                         total_bytes += len(chunk)
                 logger.info(f"Streamed {total_bytes} bytes to: {output_path}")
                 # 流式响应为裸 PCM，补上 WAV 头后才能被消息平台发送
-                sample_rate = _stream_sample_rate(args)
-                if sample_rate <= 0:
-                    raise RuntimeError(
-                        "未知流式 PCM 采样率，无法封装为 WAV；"
-                        "请在插件配置中填写 stream_sample_rate"
-                    )
                 wav_path = output_path.with_suffix(".wav")
-                with wave.open(str(wav_path), "wb") as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(sample_rate)
-                    wav_file.writeframes(output_path.read_bytes())
-                output_path.unlink(missing_ok=True)
+                try:
+                    sample_rate = _stream_sample_rate(args)
+                    if sample_rate <= 0:
+                        raise RuntimeError(
+                            "未知流式 PCM 采样率，无法封装为 WAV；"
+                            "请在插件配置中填写 stream_sample_rate"
+                        )
+                    with wave.open(str(wav_path), "wb") as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(sample_rate)
+                        wav_file.writeframes(output_path.read_bytes())
+                except Exception:
+                    # 封装失败时删除半成品 WAV，避免回退重试继续堆积孤立文件
+                    wav_path.unlink(missing_ok=True)
+                    raise
+                finally:
+                    output_path.unlink(missing_ok=True)
                 logger.info(f"Wrapped PCM into WAV: {wav_path} ({sample_rate} Hz)")
                 return str(wav_path)
 
@@ -508,13 +514,15 @@ def _payload_qwen3_tts(args) -> dict:
 
     speaker_embedding = _get(args, "speaker_embedding")
     if speaker_embedding:
-        # ★ 防御性处理：确保是字符串路径再 open
+        # ★ 防御性处理：确保是单个来源（本地路径 / http(s) URL / data URI）
         se_path = speaker_embedding
         if isinstance(se_path, (list, tuple)):
             se_path = next((s for s in se_path if s), None)
         if se_path:
-            with open(str(se_path), encoding="utf-8") as f:
-                payload["speaker_embedding"] = json.load(f)
+            # Qwen3 与 Ming 的嵌入维度不同，这里跳过维度校验
+            payload["speaker_embedding"] = load_speaker_embedding(
+                str(se_path), expected_dim=None
+            )
 
     # 对照官方客户端：开启后才发送 x_vector_only_mode
     if _get(args, "x_vector_only", False):
@@ -626,7 +634,16 @@ def _payload_soulxsinger(args) -> dict:
         elif not prompt_data.startswith("data:"):
             _ensure_wav_file(prompt_data)
             prompt_data = encode_audio_to_base64_ascii(prompt_data)
-        content.append({"type": "input_audio", "input_audio": {"data": prompt_data, "format": "mp3"}})
+        # input_audio.format 需与内联音频的真实格式一致，否则服务端可能解码失败
+        head = prompt_data.split(";", 1)[0]
+        mime = head.rsplit("/", 1)[-1].lower() if "/" in head else ""
+        audio_format = {"mpeg": "mp3", "x-wav": "wav", "wave": "wav"}.get(mime, mime) or "mp3"
+        content.append(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": prompt_data, "format": audio_format},
+            }
+        )
 
     payload = {
         "modalities": ["audio"],
